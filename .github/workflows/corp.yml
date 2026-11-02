@@ -1,0 +1,112 @@
+name: corp
+
+# The work edition (docs/CORP.md): a Windows installer built with
+# src-tauri/tauri.corp.conf.json (own name, identifier, update feed and
+# signing key). It is checked by the company's security software before it is
+# handed out, so a corp-v* tag only creates a draft release: the in-app
+# updater sees it once it is published, after the check (docs/CORP.md, "リリース").
+on:
+  push:
+    tags: ["corp-v*"]
+
+permissions:
+  contents: read
+
+env:
+  # Release tags are corp-vX.Y.Z: the app's 更新内容を見る opens that page
+  # (src-tauri/src/feed.rs). Read by the Rust build.
+  VIDEO_STUDIO_TAG_PREFIX: corp-
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the tag and the work edition's config
+        run: |
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          # corp-v<version>, or corp-v<version>-<n> (docs/CORP.md, "版の番号").
+          if [[ ! "$GITHUB_REF_NAME" =~ ^corp-v${version//./\\.}(-[0-9]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match tauri.conf.json version $version"
+            exit 1
+          fi
+          if [ "$(jq -r .plugins.updater.pubkey src-tauri/tauri.corp.conf.json)" = REPLACE_WITH_CORP_PUBLIC_KEY ]; then
+            echo "::error::tauri.corp.conf.json の pubkey に社内版の公開鍵を入れる（docs/CORP.md「署名の鍵」）"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          # Restores main's cache; a tag can't save one anyone could use.
+          save-if: false
+      - name: Install Linux deps for Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # The sidecar: tauri-build wants it, and the IPC tests export with it.
+      - run: bun run ffmpeg
+      - run: bunx tsc --noEmit
+      - run: bunx vitest run
+      - run: mkdir -p dist
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    # The signing key is an environment secret of corp-release, which only
+    # corp-v* tags can use (docs/CORP.md, "署名の鍵").
+    environment: corp-release
+    # Needed to create the draft release and upload to it.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          save-if: false
+      - run: bun install --frozen-lockfile
+      - run: bun run ffmpeg x86_64-pc-windows-msvc
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The work edition's own key (not the personal edition's); the
+          # public key is in tauri.corp.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CORP_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.CORP_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          args: --config src-tauri/tauri.corp.conf.json
+          # latest.json points at the -setup.exe: the same file as the installer.
+          updaterJsonPreferNsis: true
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseBody: "社内版。検査を通ってから Publish する（docs/CORP.md）"
+          # Not seen by the updater until published, after the check.
+          releaseDraft: true
+      # What was submitted for the check and what is handed out must be the
+      # same file: compare this hash before handing it out.
+      - name: SHA-256 of the installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe
+          $lines = $exe | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
+          $lines | Set-Content -Encoding utf8 src-tauri/target/release/bundle/nsis/SHA256SUMS.txt
+          $lines | ForEach-Object { "$_" >> $env:GITHUB_STEP_SUMMARY }
+      - uses: actions/upload-artifact@v6
+        with:
+          name: video-studio-corp-${{ github.ref_name }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+            src-tauri/target/release/bundle/nsis/SHA256SUMS.txt

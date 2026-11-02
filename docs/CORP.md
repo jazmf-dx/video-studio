@@ -60,13 +60,10 @@ upstream から来る `.github/workflows/build.yml`（個人版のテストと�
 
 ## 署名の鍵
 
-アプリ内アップデートは、社内版専用の鍵で署名した更新しか受け付けない。公開鍵は `tauri.corp.conf.json` の `plugins.updater.pubkey`。個人版の鍵とは別のもので、個人版の更新が社内版に入ることはない（逆も同じ）。jazmf-dx/desktop-apps の社内版と同じ鍵を使ってよい。
+アプリ内アップデートは、社内版専用の鍵で署名した更新しか受け付けない。公開鍵は `tauri.corp.conf.json` の `plugins.updater.pubkey`。個人版の鍵とは別のもので、個人版の更新が社内版に入ることはない（逆も同じ）。
 
-```bash
-bunx @tauri-apps/cli signer generate -w video-studio-corp.key   # desktop-apps と共有するなら、そちらの鍵を使う
-```
+鍵は 2026-11 に作った組織の鍵（公開鍵 ID `4C2C8675C57523B3`。jazmf-dx/desktop-apps の社内版・jazmf-dx/pdf-one と同じ）。
 
-- 公開鍵を `tauri.corp.conf.json` の `pubkey`（`REPLACE_WITH_CORP_PUBLIC_KEY`）に入れて、PR で `main` に入れる。入れるまでは `corp` ワークフローが止まる
 - 秘密鍵とパスワードは、Environment `corp-release` の Secret（`CORP_SIGNING_PRIVATE_KEY`・`CORP_SIGNING_PRIVATE_KEY_PASSWORD`）にだけ置く。Repository secret にはしない
 - `corp-release` は、tag `corp-v*` からしか使えないようにする（Settings → Environments → Deployment branches and tags）
 - 秘密鍵のファイルは手元に残さないか、パスワード管理ツールなど安全な場所に置く。漏れたら、その鍵で署名した更新が全員の PC に入りうる
